@@ -18,15 +18,19 @@ sudo apt-get install -y --force-yes mongodb-org
 # Install WebGME
 sudo npm install -g webgme-cli --unsafe-perm=true
 
-# Startup MongoDB
+# Clone project repo
 cd /home/vagrant/
-mkdir webgmeData
+echo "####### Cloning Project #######"
+git clone https://github.com/cahartsell/MIC-Project.git
+
+
+# Startup MongoDB
 echo "####### Starting MongoDB #######"
-mongod --dbpath /home/vagrant/webgmeData &>/home/vagrant/mongod-Log &
+mongod --dbpath /home/vagrant/MIC-Project/webgmeData &>/home/vagrant/mongod-Log &
 
 # Startup WebGME
-webgme init webgmeProject
-cd webgmeProject
+cd /home/vagrant/MIC-Project/webgmeProject
+# Make sure all necessary packages installed
 sudo npm install
 sudo npm install webgme
 echo "####### Starting WebGME #######"
