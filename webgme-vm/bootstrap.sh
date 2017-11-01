@@ -23,10 +23,15 @@ cd /home/vagrant/
 echo "####### Cloning Project #######"
 git clone https://github.com/cahartsell/MIC-Project.git
 
+# Setup system init script
+echo "####### Configuring System Boot Script ########"
+cp /home/vagrant/MIC-Project/webgme-vm/webgme-init.sh /etc/init.d/
+chmod +x /etc/init.d/webgme-init.sh
+update-rc.d webgme-init.sh defaults 100
 
 # Startup MongoDB
 echo "####### Starting MongoDB #######"
-mongod --dbpath /home/vagrant/MIC-Project/webgmeData &>/home/vagrant/mongod-Log &
+mongod --dbpath /home/vagrant/MIC-Project/webgmeData &>/home/vagrant/mongod-log &
 
 # Startup WebGME
 cd /home/vagrant/MIC-Project/webgmeProject
