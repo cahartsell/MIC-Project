@@ -1,4 +1,17 @@
 {
-  "components": {},
-  "dependencies": {}
+  "components": {
+    "plugins": {
+      "TutorialPlugin": {
+        "src": "src/plugins/TutorialPlugin",
+        "test": "test/plugins/TutorialPlugin"
+      },
+      "CPNMarkingGenerator": {
+        "src": "src/plugins/CPNMarkingGenerator",
+        "test": "test/plugins/CPNMarkingGenerator"
+      }
+    }
+  },
+  "dependencies": {
+    "plugins": {}
+  }
 }
