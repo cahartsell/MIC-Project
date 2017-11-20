@@ -1,3 +1,4 @@
 webgme-vm/.vagrant/
 webgmeData/journal/
 webgmeData/mongod.lock
+webgmeData/diagnostic.data/
