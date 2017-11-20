@@ -10,3 +10,6 @@ var config = require('./config.webgme'),
 validateConfig(config);
 module.exports = config;
 config.plugin.allowBrowserExecution = true;
+config.plugin.allowServerExecution = true;
+config.addOn.enable = true;
+config.core.enableCustomConstraints = true;
