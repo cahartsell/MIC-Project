@@ -11,14 +11,21 @@ config.plugin.basePaths.push(__dirname + '/../src/plugins');
 
 
 
+config.visualization.panelPaths.push(__dirname + '/../node_modules/webgme-icore/src/visualizers/panels');
 
 
 
 
 // Visualizer descriptors
-
+config.visualization.visualizerDescriptors.push(__dirname + '/../src/visualizers/Visualizers.json');
 // Add requirejs paths
-
+config.requirejsPaths = {
+  'ICore': 'panels/ICore/ICorePanel',
+  'panels': './src/visualizers/panels',
+  'widgets': './src/visualizers/widgets',
+  'panels/ICore': './node_modules/webgme-icore/src/visualizers/panels/ICore',
+  'widgets/ICore': './node_modules/webgme-icore/src/visualizers/widgets/ICore'
+};
 
 
 config.mongo.uri = 'mongodb://127.0.0.1:27017/webgmeproject';
