@@ -52,77 +52,134 @@ define([
      *
      * @param {function(string, plugin.PluginResult)} callback - the result callback
      */
-    CPNMarkingGenerator.prototype.main = function (callback) {
-   var self = this,
-       activeNode = this.activeNode,
-       core = this.core,
-       logger = this.logger,
-       cfsNode = core.getParent(activeNode),
-       pipeNodes = [],
-       artifact = self.blobClient.createArtifact('pipe-names');
-  
-  logger.debug('path:', core.getPath(activeNode));
-  logger.info('name:', core.getAttribute(activeNode, 'name'));
-  logger.warn('pos :', core.getRegistry(activeNode, 'position'));
-  logger.error('guid:', core.getGuid(activeNode));
-  
-  function getOwnedPipes(node){
-    let childIds = core.getChildrenRelids(node),
-        ownedPipes = [];
-    logger.debug(childIds);
-    
-    for (let i=0; i<childIds.length; i++){
-      let child = core.getChild(node, childIds[i]),
-          childMetaType = core.getMetaType(child),
-          metaName = core.getAttribute(childMetaType, 'name');
-      
-      if (metaName == "PUB-Pipe" || metaName == "SUB-Pipe"){
-        ownedPipes.push(child);
-      }
-    }
-    
-    return ownedPipes;
-  }
-  
-  this.loadNodeMap()
-    .then( function(nodeMap) {
-    logger.debug('name:', core.getAttribute(cfsNode, 'name'));
-    let childIds = core.getChildrenPaths(cfsNode);
-    logger.debug(childIds);
-    
-    for (let i=0; i<childIds.length; i++){
-      let child = nodeMap[ childIds[i] ];
-      logger.info('name:', core.getAttribute(child, 'name'));
-      pipeNodes = pipeNodes.concat( getOwnedPipes(child) );
-    }
-    
-    let names = [];
-    for (let i=0; i<pipeNodes.length; i++){
-      logger.info('TTT name:', core.getAttribute(pipeNodes[i], 'name'));
-      names.push( core.getAttribute(pipeNodes[i], 'name') );
-      // Find all Message names here
-    }
-    let namesJSON = JSON.stringify(names);
-    
-    artifact.addFiles({'names.json': namesJSON})
-      .then(function (fileMetadataHashes) {
-      return artifact.save();
-    })
-      .then(function (artifactHash) {
-      self.result.addArtifact(artifactHash);
-      self.logger.info('Added complex artifact to blob-storage. Artifact Hash:', artifactHash);
-      self.result.setSuccess(true);
-      callback(null, self.result);
-    })
-      .catch(function (err){
-      logger.error(err);
-    callback(err);
-    });
-  })
-    .catch( function(err) {
-    logger.error(err);
-    callback(err);
-  });
-}
+    CPNMarkingGenerator.prototype.main =  function (callback) {
+		var self = this,
+		   activeNode = this.activeNode,
+		   core = this.core,
+		   logger = this.logger;
+		   
+		self.loadNodeMap()
+			.then( function(nodeMap) {
+			for(const node in nodeMap){
+				if ( self.isMetaTypeOf(nodeMap[node], self.META.SoftwareBus) ){
+						genSubscriberTable(self, nodeMap, nodeMap[node]);
+				}
+			}
+			
+			callback();
+		})
+			.catch( function(err) {
+			logger.error(err);
+			callback(err);
+		});
+	}
+	
+	function genSubscriberTable(self, nodeMap, busNode) {
+	   var core = self.core,
+			logger = self.logger,
+			cfsNode = core.getParent(busNode),
+			pipeNodes = [];
+	  
+			/* Function to find all nodes of a given meta type (metaName) contained within a node */
+		  /* Only searches immediate children. Returns array of desired nodes */
+		  function getContainedMetaType(node, metaType){
+			let childIds = core.getChildrenRelids(node),
+				nodes = [];
+			
+			for (let i=0; i<childIds.length; i++){
+			  let child = core.getChild(node, childIds[i]);
+			  
+			  if ( self.isMetaTypeOf(child, metaType) ){
+				nodes.push(child);
+			  }
+			}
+			return nodes;
+		  }
+		  
+		  /* Load node map and find all connected pipes */
+		/* Find all pipes within CFS system */
+		let childIds = core.getChildrenPaths(cfsNode);
+		for (let i=0; i<childIds.length; i++){
+		  let child = nodeMap[ childIds[i] ],
+			  nodes = [];
+		  nodes = getContainedMetaType(child, self.META.MSGPipe);
+		  pipeNodes = pipeNodes.concat(nodes);
+		}
+
+		/* Get names of messages within pipes */
+		let msgNodes = [];
+		for (let i=0; i<pipeNodes.length; i++){
+		  msgNodes = msgNodes.concat( getContainedMetaType(pipeNodes[i], self.META.MessageTypes) );
+		}
+
+		/* Find corresponding msg_id (default 0) for each message type */
+		let msgIds = {},
+			usedIds = [];
+		for (let i=0; i<msgNodes.length; i++){
+		  let msgName = core.getAttribute(msgNodes[i], "name"),
+			  msgId = core.getAttribute(msgNodes[i], "msg_id");
+		  
+		  if (msgId == 0) { // Default Value. msg_id not set
+			if (!msgIds[msgName]){ // If this msgName has not yet been seen
+			  msgIds[msgName] = 0;
+			}
+		  }
+		  else { // Specific msg_id has been set in model
+			msgIds[msgName] = msgId;
+			usedIds.push(msgId);
+		  }
+		}
+
+		/* Assign unique ID's to all unassigned message types */
+		let nextId = 1,
+			nextIdIdx = 0;
+		usedIds.sort(function(a,b){return a<b});
+		for (const msgName in msgIds){
+		  // If message already has an id, continue
+		  if (msgIds[msgName] > 0){
+			continue;
+		  }
+		  
+		  // Check if nextId exists in sorted usedIds array. If so, increment until it does not.
+		  while (nextId == usedIds[nextIdIdx]){ 
+			nextId++;
+			nextIdIdx++;
+		  }
+		  
+		  msgIds[msgName] = nextId;
+		  nextId++;
+		}
+
+		/* Set all message nodes msg_id to assigned ID number */
+		for (let i=0; i<msgNodes.length; i++){
+		  let msgName = core.getAttribute(msgNodes[i], "name"),
+			  msgId = msgIds[msgName];
+		  
+		  debugger;
+		  core.setAttribute(msgNodes[i], 'msg_id', msgId);
+		}
+
+		/* Create/replace subscriber table in software bus node */
+		let subTableNode = core.createNode({parent: busNode, base: self.META.SubscriptionTable}),
+			subPipeNodes = pipeNodes.filter(function(node) { return self.isMetaTypeOf(node, self.META.SUBPipe); });
+		for (let i=0; i<subPipeNodes.length; i++){
+		  let subMsgNodes = getContainedMetaType(subPipeNodes[i], self.META.MessageTypes),
+			  appNode = core.getParent(subPipeNodes[i]),
+			  appName = core.getAttribute(appNode, 'name'),
+			  subscriberNode = core.createNode({parent: subTableNode, base: self.META.Subscriber});
+		  
+		  core.setAttribute(subscriberNode, 'name', appName);
+		  for (let j=0; j<subMsgNodes.length; j++){
+			let msgName = core.getAttribute(subMsgNodes[j], 'name'),
+				msgId = core.getAttribute(subMsgNodes[j], 'msg_id'),
+				subbedMsgNode = core.createNode({parent: subscriberNode, base: self.META.Message});
+			
+			core.setAttribute(subbedMsgNode, 'name', msgName);
+			core.setAttribute(subbedMsgNode, 'msg_id', msgId);
+		  }
+		}
+	
+	}
+
     return CPNMarkingGenerator;
 });
