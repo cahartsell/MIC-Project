@@ -66,7 +66,15 @@ define([
 				}
 			}
 			
-			callback();
+			self.save("Generated subscription table")
+				.then( function(){
+					self.result.setSuccess(true);
+					callback(null, self.result);
+				})
+				.catch(function (err) {
+					logger.error(err);
+					callback(err, self.result);
+				});
 		})
 			.catch( function(err) {
 			logger.error(err);
