@@ -53,141 +53,262 @@ define([
      * @param {function(string, plugin.PluginResult)} callback - the result callback
      */
     CPNMarkingGenerator.prototype.main =  function (callback) {
-		var self = this,
-		   activeNode = this.activeNode,
-		   core = this.core,
-		   logger = this.logger;
-		   
-		self.loadNodeMap()
-			.then( function(nodeMap) {
-			for(const node in nodeMap){
-				if ( self.isMetaTypeOf(nodeMap[node], self.META.SoftwareBus) ){
-						genSubscriberTable(self, nodeMap, nodeMap[node]);
-				}
-			}
-			
-			self.save("Generated subscription table")
-				.then( function(){
-					self.result.setSuccess(true);
-					callback(null, self.result);
-				})
-				.catch(function (err) {
-					logger.error(err);
-					callback(err, self.result);
-				});
-		})
-			.catch( function(err) {
-			logger.error(err);
-			callback(err);
-		});
-	}
-	
-	function genSubscriberTable(self, nodeMap, busNode) {
-	   var core = self.core,
-			logger = self.logger,
-			cfsNode = core.getParent(busNode),
-			pipeNodes = [];
-	  
-			/* Function to find all nodes of a given meta type (metaName) contained within a node */
-		  /* Only searches immediate children. Returns array of desired nodes */
-		  function getContainedMetaType(node, metaType){
-			let childIds = core.getChildrenRelids(node),
-				nodes = [];
-			
-			for (let i=0; i<childIds.length; i++){
-			  let child = core.getChild(node, childIds[i]);
-			  
-			  if ( self.isMetaTypeOf(child, metaType) ){
-				nodes.push(child);
-			  }
-			}
-			return nodes;
-		  }
-		  
-		  /* Load node map and find all connected pipes */
-		/* Find all pipes within CFS system */
-		let childIds = core.getChildrenPaths(cfsNode);
-		for (let i=0; i<childIds.length; i++){
-		  let child = nodeMap[ childIds[i] ],
-			  nodes = [];
-		  nodes = getContainedMetaType(child, self.META.MSGPipe);
-		  pipeNodes = pipeNodes.concat(nodes);
-		}
+  var self = this,
+      activeNode = this.activeNode,
+      core = this.core,
+      logger = this.logger,
+      artifacts = [],
+      artifactPromises = [],
+      today = new Date(),
+      dateStr = '';
+  
+  let month = today.getMonth() + 1;
+  dateStr = month + '-' + today.getDate() + '-' + today.getFullYear() + '_';
+  dateStr = dateStr + today.getUTCHours() + '-' + today.getUTCMinutes();
+  
+  self.loadNodeMap(activeNode)
+    .then( function(nodeMap) {
 
-		/* Get names of messages within pipes */
-		let msgNodes = [];
-		for (let i=0; i<pipeNodes.length; i++){
-		  msgNodes = msgNodes.concat( getContainedMetaType(pipeNodes[i], self.META.MessageTypes) );
-		}
+    /* Find all software buses within the nodeMap and generate appropriate subscription tables */
+    for(const node in nodeMap){
+      if( (self.isMetaTypeOf(nodeMap[node], self.META.SoftwareBus)) && !(core.isMetaNode(nodeMap[node])) ){
+        genSubscriberTable(self, nodeMap, nodeMap[node]);
+      }
+    }
 
-		/* Find corresponding msg_id (default 0) for each message type */
-		let msgIds = {},
-			usedIds = [];
-		for (let i=0; i<msgNodes.length; i++){
-		  let msgName = core.getAttribute(msgNodes[i], "name"),
-			  msgId = core.getAttribute(msgNodes[i], "msg_id");
-		  
-		  if (msgId == 0) { // Default Value. msg_id not set
-			if (!msgIds[msgName]){ // If this msgName has not yet been seen
-			  msgIds[msgName] = 0;
-			}
-		  }
-		  else { // Specific msg_id has been set in model
-			msgIds[msgName] = msgId;
-			usedIds.push(msgId);
-		  }
-		}
+    return self.save("Generated subscription table");
+  })
+    .then(function(commitResult) {
+    /* Must reload node map after making changes. PS: Javascript is hideous */
+    self.loadNodeMap(activeNode)
+      .then( function(nodeMap) {
+      /* For each CFS System in nodeMap, generate a set of CPN initial markings */
+      for(const node in nodeMap){
+        if( (self.isMetaTypeOf(nodeMap[node], self.META.CFSSystem)) && !(core.isMetaNode(nodeMap[node])) ){
+          let sysName = core.getAttribute(nodeMap[node], 'name'),
+              artifact = self.blobClient.createArtifact(sysName + '_' + dateStr);
 
-		/* Assign unique ID's to all unassigned message types */
-		let nextId = 1,
-			nextIdIdx = 0;
-		usedIds.sort(function(a,b){return a<b});
-		for (const msgName in msgIds){
-		  // If message already has an id, continue
-		  if (msgIds[msgName] > 0){
-			continue;
-		  }
-		  
-		  // Check if nextId exists in sorted usedIds array. If so, increment until it does not.
-		  while (nextId == usedIds[nextIdIdx]){ 
-			nextId++;
-			nextIdIdx++;
-		  }
-		  
-		  msgIds[msgName] = nextId;
-		  nextId++;
-		}
+          artifacts.push( artifact );
+          artifactPromises.push( genSystemMarkings(self, nodeMap, artifact, nodeMap[node]) );
+        }
+      }
 
-		/* Set all message nodes msg_id to assigned ID number */
-		for (let i=0; i<msgNodes.length; i++){
-		  let msgName = core.getAttribute(msgNodes[i], "name"),
-			  msgId = msgIds[msgName];
-		  
-		  debugger;
-		  core.setAttribute(msgNodes[i], 'msg_id', msgId);
-		}
+      /* Wait for all tasks to complete */
+      Promise.all(artifactPromises)
+        .then(function(fileHashes) {
+        /* Save all artifacts and record hash promises */
+        let artifactHashPromises = [];
+        for (let i=0; i<artifacts.length; i++){
+          artifactHashPromises.push( artifacts[i].save() );
+        }
+        return artifactHashPromises;
+      })
+        .then(function(artifactHashPromises) {
+        /* Wait for all artifacts to save */
+        Promise.all(artifactHashPromises)
+          .then(function(hashes) {
+          /* Add all artifact hashes to result */
+          for (let i=0; i<hashes.length; i++){
+            self.result.addArtifact(hashes[i]);
+          }
+          self.result.setSuccess(true);
+          callback(null, self.result);
+        })
+        /* Promise.all artifactHashPromises catch */
+          .catch(function(err) {
+          logger.error(err);
+          callback(err);
+        });
+      })
+      /* Promise.all artifactPromises catch */
+        .catch(function(err) {
+        logger.error(err);
+        callback(err);
+      });
+    })
+    /* 2nd loadNodeMap catch */
+      .catch(function(err) {
+      logger.error(err);
+      callback(err);
+    });
+  })
+  /* loadNodeMap catch */
+    .catch(function(err) { 
+    logger.error(err);
+    callback(err);
+  });
+}
 
-		/* Create/replace subscriber table in software bus node */
-		let subTableNode = core.createNode({parent: busNode, base: self.META.SubscriptionTable}),
-			subPipeNodes = pipeNodes.filter(function(node) { return self.isMetaTypeOf(node, self.META.SUBPipe); });
-		for (let i=0; i<subPipeNodes.length; i++){
-		  let subMsgNodes = getContainedMetaType(subPipeNodes[i], self.META.MessageTypes),
-			  appNode = core.getParent(subPipeNodes[i]),
-			  appName = core.getAttribute(appNode, 'name'),
-			  subscriberNode = core.createNode({parent: subTableNode, base: self.META.Subscriber});
-		  
-		  core.setAttribute(subscriberNode, 'name', appName);
-		  for (let j=0; j<subMsgNodes.length; j++){
-			let msgName = core.getAttribute(subMsgNodes[j], 'name'),
-				msgId = core.getAttribute(subMsgNodes[j], 'msg_id'),
-				subbedMsgNode = core.createNode({parent: subscriberNode, base: self.META.Message});
-			
-			core.setAttribute(subbedMsgNode, 'name', msgName);
-			core.setAttribute(subbedMsgNode, 'msg_id', msgId);
-		  }
-		}
-	
-	}
+/* Function to find all nodes of a given meta type (metaName) contained within a node */
+/* Only searches immediate children. Returns array of desired nodes */
+function getContainedMetaType(node, self, metaType) {
+  let core = self.core,
+      childIds = core.getChildrenRelids(node),
+      nodes = [];
+
+  for (let i=0; i<childIds.length; i++){
+    let child = core.getChild(node, childIds[i]);
+
+    if ( self.isMetaTypeOf(child, metaType) ){
+      debugger;
+      nodes.push(child);
+    }
+  }
+  return nodes;
+}
+
+function genSystemMarkings(self, nodeMap, artifact, sysNode) {
+  let core = self.core,
+      logger = self.logger,
+      subTableStr = '';
+
+  for(const node in nodeMap){
+    /* If node is a Subscription table, generate subTableStr. Should only be 1 subscription table per system */
+    if( (self.isMetaTypeOf(nodeMap[node], self.META.SubscriptionTable)) && !(core.isMetaNode(nodeMap[node])) ){
+      let subTable = nodeMap[node],
+          subs = getContainedMetaType(subTable, self, self.META.Subscriber);
+      
+      /* For each subscription, get app name and subscribed message ID's */
+      subTableStr = '[';
+      for(let i=0; i<subs.length; i++){
+        let appName = core.getAttribute(subs[i], 'name'),
+            subMsgs = getContainedMetaType(subs[i], self, self.META.Message),
+            msgIds = subMsgs.map(function(msg) { return core.getAttribute(msg, 'msg_id'); }),
+            msgIdStr = msgIds.toString();
+        
+        subTableStr += '{app_name="' + appName + '", msgs=[' + msgIdStr + ']},\n'
+      }
+      /* Final formatting */
+      if(subTableStr.endsWith(',\n')){
+        subTableStr = subTableStr.slice(0, -2);
+        subTableStr = subTableStr.concat(']');
+      }
+    }
+  }
+  
+  /* Add text files to artifact. Return promise */
+  return artifact.addFiles({
+    'subscriptionTable.txt': subTableStr
+  })
+}
+
+
+function genSubscriberTable(self, nodeMap, busNode) {
+  var core = self.core,
+      logger = self.logger,
+      cfsNode = core.getParent(busNode),
+      pipeNodes = [];
+  
+  /* Load node map and find all connected pipes */
+  /* Find all pipes within CFS system */
+  let childIds = core.getChildrenPaths(cfsNode);
+  for (let i=0; i<childIds.length; i++){
+    let child = nodeMap[ childIds[i] ],
+        nodes = [];
+    nodes = getContainedMetaType(child, self, self.META.MSGPipe);
+    pipeNodes = pipeNodes.concat(nodes);
+  }
+
+  /* Get names of messages within pipes */
+  let msgNodes = [];
+  for (let i=0; i<pipeNodes.length; i++){
+    msgNodes = msgNodes.concat( getContainedMetaType(pipeNodes[i], self, self.META.MessageTypes) );
+  }
+
+  /* Find corresponding msg_id (default 0) for each message type */
+  let msgIds = {};
+  for (let i=0; i<msgNodes.length; i++){
+    let msgName = core.getAttribute(msgNodes[i], "name"),
+        msgId = core.getAttribute(msgNodes[i], "msg_id");
+    /* Default Value. msg_id not set */
+    if (msgId == 0) { 
+      // If this msgName has not yet been seen
+      if (!msgIds[msgName]){ 
+        msgIds[msgName] = 0;
+      }
+    }
+    /* Specific msg_id has been set in model */
+    else { 
+      msgIds[msgName] = msgId;
+    }
+  }
+  
+  /* Check for duplicate IDs */
+  let usedIds = [];
+  for (const name in msgIds){
+    let id = msgIds[name];
+    /* If id is not found in usedIds, add it */
+    if ( usedIds.find(function(x){ return x === id; }) == undefined) {
+      usedIds.push(id);  
+    }
+    /* ID already taken. Reset to 0 */
+    else { 
+      msgIds[name] = 0;
+    }
+  }
+
+  /* Assign unique ID's to all unassigned message types */
+  let nextId = 1,
+      nextIdIdx = 0;
+  usedIds.sort(function(a,b){return a<b});
+  for (const msgName in msgIds){
+    /* If message already has an id, continue */
+    if (msgIds[msgName] > 0){
+      continue;
+    }
+
+    /* Check if nextId exists in sorted usedIds array. If so, increment until it does not. */
+    while (nextId == usedIds[nextIdIdx]){ 
+      nextId++;
+      nextIdIdx++;
+    }
+
+    /* Assign message ID and increment ID */
+    msgIds[msgName] = nextId;
+    nextId++;
+  }
+
+  /* Set all message nodes' msg_id attribute to assigned ID number */
+  for (let i=0; i<msgNodes.length; i++){
+    let msgName = core.getAttribute(msgNodes[i], "name"),
+        msgId = msgIds[msgName];
+
+    core.setAttribute(msgNodes[i], 'msg_id', msgId);
+  }
+  
+  /* Find and delete any existing subscription table(s) in software bus node */
+  let oldSubTables = getContainedMetaType(busNode, self, self.META.SubscriptionTable);
+  for (let i=0; i<oldSubTables.length; i++) {
+    core.deleteNode(oldSubTables[i]);
+  }
+
+  /* Create new subscriber table in software bus node */
+  let subTableNode = core.createNode({parent: busNode, base: self.META.SubscriptionTable}),
+      subPipeNodes = pipeNodes.filter(function(node) { return self.isMetaTypeOf(node, self.META.SUBPipe); });
+  for (let i=0; i<subPipeNodes.length; i++){
+    /* Create subscriber entry in Sub table */
+    let subMsgNodes = getContainedMetaType(subPipeNodes[i], self, self.META.MessageTypes),
+        appNode = core.getParent(subPipeNodes[i]),
+        appName = core.getAttribute(appNode, 'name'),
+        pipeName = core.getAttribute(subPipeNodes[i], 'name'),
+        subscriberNode = core.createNode({parent: subTableNode, base: self.META.Subscriber});
+    debugger;
+    core.setAttribute(subscriberNode, 'name', appName);
+    core.setAttribute(subscriberNode, 'pipeName', pipeName);
+    
+    /* Create message entries within subscriber entry */
+    for (let j=0; j<subMsgNodes.length; j++){
+      let msgName = core.getAttribute(subMsgNodes[j], 'name'),
+          msgId = core.getAttribute(subMsgNodes[j], 'msg_id'),
+          subbedMsgNode = core.createNode({parent: subscriberNode, base: self.META.Message});
+
+      core.setAttribute(subbedMsgNode, 'name', msgName);
+      core.setAttribute(subbedMsgNode, 'msg_id', msgId);
+    }
+  }
+
+  return 0;
+}
 
     return CPNMarkingGenerator;
 });
