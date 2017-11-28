@@ -59,6 +59,7 @@ define([
       logger = this.logger,
       artifacts = [],
       artifactPromises = [],
+      msgIdsMap = {},
       today = new Date(),
       dateStr = '';
   
@@ -72,7 +73,7 @@ define([
     /* Find all software buses within the nodeMap and generate appropriate subscription tables */
     for(const node in nodeMap){
       if( (self.isMetaTypeOf(nodeMap[node], self.META.SoftwareBus)) && !(core.isMetaNode(nodeMap[node])) ){
-        genSubscriberTable(self, nodeMap, nodeMap[node]);
+        msgIdsMap = genSubscriberTable(self, nodeMap, nodeMap[node]);
       }
     }
 
@@ -89,7 +90,7 @@ define([
               artifact = self.blobClient.createArtifact(sysName + '_' + dateStr);
 
           artifacts.push( artifact );
-          artifactPromises.push( genSystemMarkings(self, nodeMap, artifact, nodeMap[node]) );
+          artifactPromises.push( genSystemMarkings(self, nodeMap, artifact, msgIdsMap, nodeMap[node]) );
         }
       }
 
@@ -150,14 +151,13 @@ function getContainedMetaType(node, self, metaType) {
     let child = core.getChild(node, childIds[i]);
 
     if ( self.isMetaTypeOf(child, metaType) ){
-      debugger;
       nodes.push(child);
     }
   }
   return nodes;
 }
 
-function genSystemMarkings(self, nodeMap, artifact, sysNode) {
+function genSystemMarkings(self, nodeMap, artifact, msgIdsMap, sysNode) {
   let core = self.core,
       logger = self.logger,
       subTableStr = '';
@@ -165,33 +165,196 @@ function genSystemMarkings(self, nodeMap, artifact, sysNode) {
   for(const node in nodeMap){
     /* If node is a Subscription table, generate subTableStr. Should only be 1 subscription table per system */
     if( (self.isMetaTypeOf(nodeMap[node], self.META.SubscriptionTable)) && !(core.isMetaNode(nodeMap[node])) ){
-      let subTable = nodeMap[node],
-          subs = getContainedMetaType(subTable, self, self.META.Subscriber);
-      
-      /* For each subscription, get app name and subscribed message ID's */
-      subTableStr = '[';
-      for(let i=0; i<subs.length; i++){
-        let appName = core.getAttribute(subs[i], 'name'),
-            subMsgs = getContainedMetaType(subs[i], self, self.META.Message),
-            msgIds = subMsgs.map(function(msg) { return core.getAttribute(msg, 'msg_id'); }),
-            msgIdStr = msgIds.toString();
-        
-        subTableStr += '{app_name="' + appName + '", msgs=[' + msgIdStr + ']},\n'
-      }
-      /* Final formatting */
-      if(subTableStr.endsWith(',\n')){
-        subTableStr = subTableStr.slice(0, -2);
-        subTableStr = subTableStr.concat(']');
-      }
+      subTableStr = getSubscriptionTableStr(self, nodeMap, nodeMap[node]);
     }
   }
   
+  let appNodes = getContainedMetaType(sysNode, self, self.META.GenericApp),
+      appStr = '[';
+  for (let i=0; i<appNodes.length; i++){
+    let app = appNodes[i];
+    
+    if( !(core.isMetaNode(app)) ){
+      appStr += getAppString(self, nodeMap, msgIdsMap, app);
+    }
+  }
+  /* Format appStr */
+  if (appStr.endsWith(',\n')){
+    appStr = appStr.slice(0,-2);
+  }
+  appStr += ']';
+  
   /* Add text files to artifact. Return promise */
   return artifact.addFiles({
-    'subscriptionTable.txt': subTableStr
+    'subscriptionTable.txt': subTableStr,
+    'apps.txt': appStr
   })
 }
 
+function getSubscriptionTableStr(self, nodeMap, subTableNode) {
+  let core = self.core,
+      logger = self.logger,
+      subs = getContainedMetaType(subTableNode, self, self.META.Subscriber),
+      subTableStr = '',
+      msgIdMap = {};
+
+  /* For each subscription, get app name and subscribed message ID's */
+  subTableStr = '[';
+  for(let i=0; i<subs.length; i++){
+    let appName = core.getAttribute(subs[i], 'name'),
+        subMsgs = getContainedMetaType(subs[i], self, self.META.Message),
+        msgIds = subMsgs.map(function(msg) { return core.getAttribute(msg, 'msg_id'); }),
+        msgIdStr = msgIds.toString();
+    
+    for(let j=0; j<subMsgs.length; j++){
+      let msgName = core.getAttribute(subMsgs[j], 'name'),
+          msgId = core.getAttribute(subMsgs[j], 'msg_id');
+
+      msgIdMap[msgName] = msgId;
+    }
+
+    subTableStr += '{app_name="' + appName + '", msgs=[' + msgIdStr + ']},\n'
+  }
+  
+  /* Formatting */
+  if(subTableStr.endsWith(',\n')){
+    subTableStr = subTableStr.slice(0, -2);
+  }
+  subTableStr = subTableStr.concat(']');
+  
+  /* Create MSG Name - ID table */
+  subTableStr += '\n\n\nMSG ID - MSG Name\n'
+  for(const name in msgIdMap){
+    subTableStr += msgIdMap[name] + ' - ' + name + '\n';
+  }
+  
+  return subTableStr;
+}
+
+function getAppString(self, nodeMap, msgIdsMap, appNode) {
+  let core = self.core,
+      logger = self.logger,
+      appStr = '',
+      appName = core.getAttribute(appNode, 'name'),
+      appWCET = core.getAttribute(appNode, 'WCET'),
+      appPriority = core.getAttribute(appNode, 'priority');
+  
+  appStr += '{name="' + appName +'", ';
+  appStr += 'WCET=' + appWCET + ', ';
+  appStr += 'priority=' + appPriority + ', ';
+  appStr += 'wakeup_cnt=0, exe_time=0, handlers=[';
+  
+  let appMsgHandlers = getContainedMetaType(appNode, self, self.META.MsgHandler);
+  for(let i=0; i<appMsgHandlers.length; i++){
+    let handlerNode = appMsgHandlers[i],
+        handlerWCET = core.getAttribute(handlerNode, 'WCET'),
+        triggerMsgs = getContainedMetaType(handlerNode, self, self.META.TriggerMsg),
+        outputMsgGroups = getContainedMetaType(handlerNode, self, self.META.OutputMsgs);
+    
+    /* Currently assume (and META requires) only one trigger message. May change later */
+    let triggerName = '',
+        triggerId = 0;
+    for(let j=0; j<triggerMsgs.length; j++){
+      triggerName = core.getAttribute(triggerMsgs[j], 'name');
+      triggerId = core.getAttribute(triggerMsgs[j], 'msg_id');
+    }
+    /* Better error handling would be good */
+    if (triggerName === '') {
+      logger.error("Trigger msg name not initialized or no trigger msg exists");
+    }
+    else if (triggerId === 0) {
+      logger.error("Trigger msg ID not assigned");
+    }
+    
+    /* Find and add output message info for each output message group */
+    for(let j=0; j<outputMsgGroups.length; j++){
+      let outputMsgGroup = outputMsgGroups[j];
+      
+      /* Add trigger msg info to appStr */
+      appStr += '{msg_name="' + triggerName + '", ';
+      appStr += 'msg_id=' + triggerId + ', ';
+      appStr += 'WCET=' + handlerWCET + ', ';
+      appStr += 'responses=[';
+      
+      /* Add each message within outputMsgGroup to string */
+      let outputMsgs = getContainedMetaType(outputMsgGroup, self, self.META.MessageTypes);
+      appStr += getMsgListString(outputMsgs, appName, self);
+      appStr = appStr.concat(']},\n');
+    }
+  }
+  /* Formatting of handlers */
+  if(appStr.endsWith(',\n')){
+    appStr = appStr.slice(0, -2);
+  }
+  appStr = appStr.concat('],\n');
+  
+  /* Get periodic actions */
+  let appPeriodicActions = getContainedMetaType(appNode, self, self.META.PeriodicAction);
+  appStr += "periodic=[";
+  for(let i=0; i<appPeriodicActions.length; i++){
+    let action = appPeriodicActions[i],
+        period = core.getAttribute(action, 'period'),
+        offset = core.getAttribute(action, 'offset'),
+        WCET = core.getAttribute(action, 'WCET');
+    
+    appStr += '{period=' + period + ', ';
+    appStr += 'offset=' + offset + ', ';
+    appStr += 'WCET=' + WCET + ', ';
+    appStr += 'msgs=[';
+    
+    /* Each periodic action can contain multiple messages */
+    let msgs = getContainedMetaType(action, self, self.META.MessageTypes);
+    appStr += getMsgListString(msgs, appName, self);
+    appStr += ']},\n';
+  }
+  /* Format periodic messages */
+  if(appStr.endsWith(',\n')){
+    appStr = appStr.slice(0, -2);
+  }
+  appStr += ']';
+  
+  return appStr;
+}
+
+function getMsgListString(msgs, sender, self){
+  let core = self.core,
+      msgsStr = '';
+
+  for(let i=0; i<msgs.length; i++){
+    let id = core.getAttribute(msgs[i], 'msg_id');
+    msgsStr += '{sender="' + sender + '", ';
+    msgsStr += 'destination="", msg_id=' + id + ', ';
+    msgsStr += 'sys_time=0, msg_type="DATA", entries=[';
+
+    /* Each message may contain multiple data entries */
+    let dataEntries = getContainedMetaType(msgs[i], self, self.META.DataEntry);
+    for(let j=0; j<dataEntries.length; j++){
+      let entry = dataEntries[j],
+          entryName = core.getAttribute(entry, 'name'),
+          entryID = core.getAttribute(entry, 'id'),
+          entryValue = core.getAttribute(entry, 'value'),
+          entryOutcome = core.getAttribute(entry, 'outcome'),
+          entryType = core.getAttribute(entry, 'entry_type');
+
+      msgsStr += '{name="' + entryName + '", ';
+      msgsStr += 'id="' + entryID + '", ';
+      msgsStr += 'value="' + entryValue + '", ';
+      msgsStr += 'outcome="' + entryOutcome + '", ';
+      msgsStr += 'entry_type="' + entryType + '"}, ';
+    }
+    /* Formatting of data entries */
+    if(msgsStr.endsWith(', ')){
+      msgsStr = msgsStr.slice(0, -2);
+    }
+    msgsStr = msgsStr.concat(']},\n');
+  }
+  /* Formatting of output messages */
+  if(msgsStr.endsWith(',\n')){
+    msgsStr = msgsStr.slice(0, -2);
+  }
+  
+  return msgsStr;
+}
 
 function genSubscriberTable(self, nodeMap, busNode) {
   var core = self.core,
@@ -269,11 +432,18 @@ function genSubscriberTable(self, nodeMap, busNode) {
   }
 
   /* Set all message nodes' msg_id attribute to assigned ID number */
-  for (let i=0; i<msgNodes.length; i++){
-    let msgName = core.getAttribute(msgNodes[i], "name"),
-        msgId = msgIds[msgName];
-
-    core.setAttribute(msgNodes[i], 'msg_id', msgId);
+  for(const node in nodeMap){
+    if( (self.isMetaTypeOf(nodeMap[node], self.META.MessageTypes)) && !(core.isMetaNode(nodeMap[node])) ){
+      let msgName = core.getAttribute(nodeMap[node], "name"),
+          msgId = msgIds[msgName];
+      
+      if (msgId === undefined){
+        let path = core.getPath(nodeMap[node]);
+        logger.error("Message " + msgName + " (path: " + path + ") msgID undefined. Most likely not connected to any software bus");
+        continue;
+      }
+      core.setAttribute(nodeMap[node], 'msg_id', msgId);
+    }
   }
   
   /* Find and delete any existing subscription table(s) in software bus node */
@@ -307,7 +477,8 @@ function genSubscriberTable(self, nodeMap, busNode) {
     }
   }
 
-  return 0;
+  /* Return msgIds map */
+  return msgIds;
 }
 
     return CPNMarkingGenerator;
