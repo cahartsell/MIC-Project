@@ -65,7 +65,7 @@ define([
   
   let month = today.getMonth() + 1;
   dateStr = month + '-' + today.getDate() + '-' + today.getFullYear() + '_';
-  dateStr = dateStr + today.getUTCHours() + '-' + today.getUTCMinutes();
+  dateStr = dateStr + today.getHours() + '-' + today.getUTCMinutes();
   
   self.loadNodeMap(activeNode)
     .then( function(nodeMap) {
