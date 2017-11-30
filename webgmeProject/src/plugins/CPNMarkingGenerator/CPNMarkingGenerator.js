@@ -297,19 +297,27 @@ function getAppStr(self, nodeMap, msgIdsMap, appNode) {
         outputMsgGroups = getContainedMetaType(handlerNode, self, self.META.OutputMsgs);
     
     /* Currently assume (and META requires) only one trigger message. May change later */
-    
     let triggerName = '',
         triggerId = 0;
-    for(let j=0; j<triggerMsgs.length; j++){
-      triggerName = core.getAttribute(triggerMsgs[j], 'name');
-      triggerId = core.getAttribute(triggerMsgs[j], 'msg_id');
+    if (triggerMsgs.length > 1){
+      logger.error("Message Handler node (path: " + core.getPath(handlerNode) + ') contains multiple trigger messages');
     }
-    /* Better error handling would be good */
-    if (triggerName === '') {
-      logger.error("Trigger msg name not initialized or no trigger msg exists");
+    else if (triggerMsgs.length < 1){
+      logger.error("Message Handler node (path: " + core.getPath(handlerNode) + ') does not have a trigger message');
     }
-    else if (triggerId === 0) {
-      logger.error("Trigger msg ID not assigned");
+    else{
+      let triggerMsg = getContainedMetaType(triggerMsgs[0], self, self.META.MessageTypes);
+      if (triggerMsg.length > 0){
+        triggerName = core.getAttribute(triggerMsg[0], 'name');
+        triggerId = core.getAttribute(triggerMsg[0], 'msg_id');
+        /* Better error handling would be good */
+        if (triggerName === '') {
+          logger.error("Trigger msg name not initialized or no trigger msg exists");
+        }
+        else if (triggerId === 0) {
+          logger.error("Trigger msg ID not assigned");
+        }
+      }
     }
     
     /* Find and add output message info for each output message group */
