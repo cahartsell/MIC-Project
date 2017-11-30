@@ -160,7 +160,10 @@ function getContainedMetaType(node, self, metaType) {
 function genSystemMarkings(self, nodeMap, artifact, msgIdsMap, sysNode) {
   let core = self.core,
       logger = self.logger,
-      subTableStr = '';
+      subTableStr = '',
+      schTableStr = '',
+      plexilStr = '',
+      envStr = '';
 
   for(const node in nodeMap){
     /* If node is a Subscription table, generate subTableStr. Should only be 1 subscription table per system */
@@ -175,19 +178,50 @@ function genSystemMarkings(self, nodeMap, artifact, msgIdsMap, sysNode) {
     let app = appNodes[i];
     
     if( !(core.isMetaNode(app)) ){
-      appStr += getAppString(self, nodeMap, msgIdsMap, app);
+      appStr += getAppStr(self, nodeMap, msgIdsMap, app);
+      appStr += ',\n\n';
     }
   }
   /* Format appStr */
-  if (appStr.endsWith(',\n')){
-    appStr = appStr.slice(0,-2);
+  if (appStr.endsWith(',\n\n')){
+    appStr = appStr.slice(0,-3);
   }
   appStr += ']';
+  
+  let envNodes = getContainedMetaType(sysNode, self, self.META.Environment);
+  if (envNodes.length > 1){
+    logger.error("System node (path: ", core.getPath(sysNode), ") contains multiple Environments.");
+  }
+  else if (envNodes.length < 1){
+    logger.error("System node (path: ", core.getPath(sysNode), ") has no Environment.");
+  }
+  else{
+    envStr = getEnviornmentStr(self, nodeMap, msgIdsMap, envNodes[0]);
+  }
+  
+  let schNodes = getContainedMetaType(sysNode, self, self.META.CFSScheduler)
+  if (schNodes.length > 1){
+    logger.error("System node (path: ", core.getPath(sysNode), ") contains multiple scheduler apps.");
+  }
+  else if (schNodes.length == 1){
+    schTableStr = getSchedulerTableStr(self, nodeMap, msgIdsMap, schNodes[0]);
+  }
+  
+  let plexilNodes = getContainedMetaType(sysNode, self, self.META.PLEXIL);
+  if (plexilNodes.length > 1){
+    logger.error("System node (path: ", core.getPath(sysNode), ") contains multiple PLEXIL apps.");
+  }
+  else if (plexilNodes.length === 1){
+    plexilStr = getPlexilStr(self, nodeMap, msgIdsMap, plexilNodes[0]);
+  }
   
   /* Add text files to artifact. Return promise */
   return artifact.addFiles({
     'subscriptionTable.txt': subTableStr,
-    'apps.txt': appStr
+    'apps.txt': appStr,
+    'environment.txt': envStr,
+    'schedulerTable.txt': schTableStr,
+    'plexil.txt': plexilStr
   })
 }
 
@@ -220,7 +254,7 @@ function getSubscriptionTableStr(self, nodeMap, subTableNode) {
   if(subTableStr.endsWith(',\n')){
     subTableStr = subTableStr.slice(0, -2);
   }
-  subTableStr = subTableStr.concat(']');
+  subTableStr += ']';
   
   /* Create MSG Name - ID table */
   subTableStr += '\n\n\nMSG ID - MSG Name\n'
@@ -231,7 +265,7 @@ function getSubscriptionTableStr(self, nodeMap, subTableNode) {
   return subTableStr;
 }
 
-function getAppString(self, nodeMap, msgIdsMap, appNode) {
+function getAppStr(self, nodeMap, msgIdsMap, appNode) {
   let core = self.core,
       logger = self.logger,
       appStr = '',
@@ -252,6 +286,7 @@ function getAppString(self, nodeMap, msgIdsMap, appNode) {
         outputMsgGroups = getContainedMetaType(handlerNode, self, self.META.OutputMsgs);
     
     /* Currently assume (and META requires) only one trigger message. May change later */
+    
     let triggerName = '',
         triggerId = 0;
     for(let j=0; j<triggerMsgs.length; j++){
@@ -278,15 +313,15 @@ function getAppString(self, nodeMap, msgIdsMap, appNode) {
       
       /* Add each message within outputMsgGroup to string */
       let outputMsgs = getContainedMetaType(outputMsgGroup, self, self.META.MessageTypes);
-      appStr += getMsgListString(outputMsgs, appName, self);
-      appStr = appStr.concat(']},\n');
+      appStr += getMsgListStr(outputMsgs, appName, self);
+      appStr += ']},\n';
     }
   }
   /* Formatting of handlers */
   if(appStr.endsWith(',\n')){
     appStr = appStr.slice(0, -2);
   }
-  appStr = appStr.concat('],\n');
+  appStr += '],\n';
   
   /* Get periodic actions */
   let appPeriodicActions = getContainedMetaType(appNode, self, self.META.PeriodicAction);
@@ -304,19 +339,131 @@ function getAppString(self, nodeMap, msgIdsMap, appNode) {
     
     /* Each periodic action can contain multiple messages */
     let msgs = getContainedMetaType(action, self, self.META.MessageTypes);
-    appStr += getMsgListString(msgs, appName, self);
+    appStr += getMsgListStr(msgs, appName, self);
     appStr += ']},\n';
   }
   /* Format periodic messages */
   if(appStr.endsWith(',\n')){
     appStr = appStr.slice(0, -2);
   }
-  appStr += ']';
+  appStr += ']}';
   
   return appStr;
 }
 
-function getMsgListString(msgs, sender, self){
+function getSchedulerTableStr(self, nodeMap, msgIdsMap, schNode) {
+  let core = self.core,
+      logger = self.logger,
+      tableStr = '[',
+      schTableNodes = getContainedMetaType(schNode, self, self.META.SCHTable);
+  
+  /* Verify only one scheduler table exists */
+  if (schTableNodes.length > 1){
+    logger.error("Scheduler app (path: " + core.getPath(schNode) + ") contains multiple sceduler tables.");
+    return '';
+  }
+  else if (schTableNodes.length < 1){
+    logger.error("Scheduler app (path: " + core.getPath(schNode) + ") does not contain a sceduler table.");
+    return '';
+  }
+  let schTableNode = schTableNodes[0],
+      msgs = getContainedMetaType(schTableNode, self, self.META.PeriodicMsg);
+  
+  /* Loop over all messages in sch table */
+  for (let i=0; i<msgs.length; i++){
+    let msg = msgs[i],
+        name = core.getAttribute(msg, 'name'),
+        period = core.getAttribute(msg, 'period');
+    
+    tableStr += '{name="' + name + '", ';
+    tableStr += 'period=' + period + ', ';
+    tableStr += 'wakeup_count=0},\n';
+  }
+  /* Formatting */
+  if(tableStr.endsWith(',\n')){
+    tableStr = tableStr.slice(0, -2);
+  }
+  tableStr += ']';
+  
+  return tableStr;
+}
+
+function getEnviornmentStr(self, nodeMap, msgIdsMap, envNode) {
+  let core = self.core,
+      logger = self.logger,
+      envStr = '[',
+      events = getContainedMetaType(envNode, self, self.META.Event);
+  
+  for (let i=0; i<events.length; i++){
+    let event = events[i],
+        eventTime = core.getAttribute(event, 'triggerTime'),
+        dataEntries = getContainedMetaType(event, self, self.META.DataEntry);
+    
+    envStr += '{in_queue=[';
+    for (let j=0; j<dataEntries.length; j++){
+      let entry = dataEntries[j],
+          entryName = core.getAttribute(entry, 'name'),
+          entryID = core.getAttribute(entry, 'id'),
+          entryValue = core.getAttribute(entry, 'value'),
+          entryOutcome = core.getAttribute(entry, 'outcome'),
+          entryType = core.getAttribute(entry, 'entry_type');
+      
+      envStr += '{name="' + entryName + '", ';
+      envStr += 'id="' + entryID + '", ';
+      envStr += 'value="' + entryValue + '", ';
+      envStr += 'outcome="' + entryOutcome + '", ';
+      envStr += 'entry_type="' + entryType + '"}, ';
+    }
+    /* Formatting of data entries */
+    if(envStr.endsWith(', ')){
+      envStr = envStr.slice(0, -2);
+    }
+    envStr += '], trigger_time=' + eventTime + '},\n';
+  }
+  /* Formatting of events */
+  if(envStr.endsWith(',\n')){
+    envStr = envStr.slice(0, -2);
+  }
+  envStr += ']';
+  
+  return envStr;
+}
+
+function getPlexilStr(self, nodeMap, msgIdsMap, plexilNode) {
+  let core = self.core,
+      logger = self.logger,
+      plexilStr = '[';
+  
+  /* Get names of PLEXIL plans */
+  let plexilPlans = getContainedMetaType(plexilNode, self, self.META.PLEXILPlan);
+  for (let i=0; i<plexilPlans.length; i++){
+    let plan = plexilPlans[i],
+        name = core.getAttribute(plan, 'name'),
+        rootNode = core.getAttribute(plan, 'rootNode');
+    
+    /* As backwards as this may seem, it is not. */
+    /* "name" in CPN model is name of root Node, not plan name */
+    plexilStr += '{name="' + rootNode + '", ';
+    plexilStr += 'nodes=' + name + '},\n';
+  }
+  /* Formatting of plans string */
+  if(plexilStr.endsWith(',\n')){
+    plexilStr = plexilStr.slice(0, -2);
+  }
+  plexilStr += ']\n\n';
+  
+  /* Initial message to load PLEXIL plan */
+  /* Currently assume first plan in array is primary plan. This is not a safe assumption */
+  if(plexilPlans.length > 0){
+    let primaryPlanName = core.getAttribute(plexilPlans[0], 'name');
+    plexilStr += '[{sender="", msg_id=0, destination="PLEXIL", msg_type="DATA", sys_time=0, entries=[';
+    plexilStr += '{name="' + primaryPlanName + '", id="", value="", outcome="", entry_type="LOADPLAN"}]}]';
+  }
+  
+  return plexilStr;
+}
+
+function getMsgListStr(msgs, sender, self){
   let core = self.core,
       msgsStr = '';
 
@@ -346,7 +493,7 @@ function getMsgListString(msgs, sender, self){
     if(msgsStr.endsWith(', ')){
       msgsStr = msgsStr.slice(0, -2);
     }
-    msgsStr = msgsStr.concat(']},\n');
+    msgsStr += ']},\n';
   }
   /* Formatting of output messages */
   if(msgsStr.endsWith(',\n')){
@@ -372,7 +519,7 @@ function genSubscriberTable(self, nodeMap, busNode) {
     pipeNodes = pipeNodes.concat(nodes);
   }
 
-  /* Get names of messages within pipes */
+  /* Get all message nodes within pipes */
   let msgNodes = [];
   for (let i=0; i<pipeNodes.length; i++){
     msgNodes = msgNodes.concat( getContainedMetaType(pipeNodes[i], self, self.META.MessageTypes) );
@@ -384,7 +531,7 @@ function genSubscriberTable(self, nodeMap, busNode) {
     let msgName = core.getAttribute(msgNodes[i], "name"),
         msgId = core.getAttribute(msgNodes[i], "msg_id");
     /* Default Value. msg_id not set */
-    if (msgId == 0) { 
+    if (msgId === 0) { 
       // If this msgName has not yet been seen
       if (!msgIds[msgName]){ 
         msgIds[msgName] = 0;
@@ -413,8 +560,9 @@ function genSubscriberTable(self, nodeMap, busNode) {
   /* Assign unique ID's to all unassigned message types */
   let nextId = 1,
       nextIdIdx = 0;
-  usedIds.sort(function(a,b){return a<b});
+  usedIds.sort(function(a,b){return a>b});
   for (const msgName in msgIds){
+    debugger;
     /* If message already has an id, continue */
     if (msgIds[msgName] > 0){
       continue;
@@ -471,7 +619,7 @@ function genSubscriberTable(self, nodeMap, busNode) {
       let msgName = core.getAttribute(subMsgNodes[j], 'name'),
           msgId = core.getAttribute(subMsgNodes[j], 'msg_id'),
           subbedMsgNode = core.createNode({parent: subscriberNode, base: self.META.Message});
-
+      
       core.setAttribute(subbedMsgNode, 'name', msgName);
       core.setAttribute(subbedMsgNode, 'msg_id', msgId);
     }
