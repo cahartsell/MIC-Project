@@ -52,7 +52,7 @@ define([
      *
      * @param {function(string, plugin.PluginResult)} callback - the result callback
      */
-    CPNMarkingGenerator.prototype.main =  function (callback) {
+    CPNMarkingGenerator.prototype.main = function (callback) {
   var self = this,
       activeNode = this.activeNode,
       core = this.core,
@@ -256,9 +256,20 @@ function getSubscriptionTableStr(self, nodeMap, subTableNode) {
   }
   subTableStr += ']';
   
+  /* Sort object names by acsending msg id's */
+  /* Probably a better way to do this, but this is simple and works */
+  let sortedNames = [];
+  for(const name in msgIdMap){
+    sortedNames.push(name);
+  }
+  sortedNames.sort(function(a,b) {
+    return (msgIdMap[a] - msgIdMap[b]);
+  });
+  
   /* Create MSG Name - ID table */
   subTableStr += '\n\n\nMSG ID - MSG Name\n'
-  for(const name in msgIdMap){
+  for(let i=0; i<sortedNames.length; i++){
+    let name = sortedNames[i];
     subTableStr += msgIdMap[name] + ' - ' + name + '\n';
   }
   
@@ -560,9 +571,8 @@ function genSubscriberTable(self, nodeMap, busNode) {
   /* Assign unique ID's to all unassigned message types */
   let nextId = 1,
       nextIdIdx = 0;
-  usedIds.sort(function(a,b){return a>b});
+  usedIds.sort(function(a,b){return a - b});
   for (const msgName in msgIds){
-    debugger;
     /* If message already has an id, continue */
     if (msgIds[msgName] > 0){
       continue;
@@ -610,7 +620,6 @@ function genSubscriberTable(self, nodeMap, busNode) {
         appName = core.getAttribute(appNode, 'name'),
         pipeName = core.getAttribute(subPipeNodes[i], 'name'),
         subscriberNode = core.createNode({parent: subTableNode, base: self.META.Subscriber});
-    debugger;
     core.setAttribute(subscriberNode, 'name', appName);
     core.setAttribute(subscriberNode, 'pipeName', pipeName);
     
