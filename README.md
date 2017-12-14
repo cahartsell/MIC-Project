@@ -1,9 +1,6 @@
 # MIC-Project
-Project for Model Integrated Computing class
+Project submission for Model Integrated Computing class
 
+Contains a .pdf of the project report, the javascript source file of the CPN plugin written, and the .webgmex export file from the project.
 
-Containes a Vagrant VM setup in webgme-vm directory. 
-Startup this VM by navigating into this folder, then running "vagrant up". 
-Setup typically takes a couple minutes.
-VM will clone this git repository and boot up a WebGME server.
-Once the VM completes initilization, connect to "localhost:8888" in host machine browser.
+The full project repository can be found on the master branch at github.com/cahartsell/MIC-Project.
